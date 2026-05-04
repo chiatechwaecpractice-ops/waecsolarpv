@@ -24,7 +24,10 @@ exports.handler = async event => {
     return json(result.ok ? 200 : 401, result);
   } catch (error) {
     console.error(error);
-    return json(500, { ok: false, message: "PIN backend is not ready. Check Netlify environment variables or sheet sharing." });
+    return json(500, {
+      ok: false,
+      message: error.publicMessage || "PIN backend is not ready. Check Netlify environment variables or sheet access."
+    });
   }
 };
 
@@ -94,6 +97,12 @@ async function readSheetRows() {
     if (!response.ok) throw new Error(`Google Sheets API read failed: ${response.status}`);
     const data = await response.json();
     return data.values || [];
+  }
+
+  if (process.env.ALLOW_PUBLIC_SHEET_AUTH !== "true") {
+    const error = new Error("Missing Google service account credentials for private Sheet access.");
+    error.publicMessage = "PIN backend is not ready. Set the Google service account variables in Netlify.";
+    throw error;
   }
 
   const csvUrl = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:csv&gid=0`;

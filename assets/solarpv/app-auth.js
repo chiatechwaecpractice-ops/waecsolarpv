@@ -200,6 +200,7 @@
     if (shouldUseBackendAuth()) {
       const backendResult = await authenticateFromBackend(payload, backendMessage);
       if (backendResult) return backendResult;
+      throw new Error(backendMessage[0] || "PIN backend is unavailable. Contact admin.");
     }
 
     const publicSheetResult = await authenticateFromPublicSheetSafely(payload, backendMessage);
