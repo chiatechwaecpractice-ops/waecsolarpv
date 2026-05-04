@@ -138,8 +138,9 @@ async function updateLoginColumns(rowNumber, values) {
 }
 
 async function getAccessToken() {
-  const email = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL;
-  const privateKey = process.env.GOOGLE_PRIVATE_KEY;
+  const credentials = getServiceAccountCredentials();
+  const email = credentials.email;
+  const privateKey = credentials.privateKey;
   if (!email || !privateKey) return null;
 
   const now = Math.floor(Date.now() / 1000);
@@ -152,8 +153,14 @@ async function getAccessToken() {
     iat: now
   }));
   const unsigned = `${header}.${claim}`;
-  const key = privateKey.replace(/\\n/g, "\n");
-  const signature = crypto.createSign("RSA-SHA256").update(unsigned).sign(key, "base64url");
+  const key = normalizePrivateKey(privateKey);
+  let signature;
+  try {
+    signature = crypto.createSign("RSA-SHA256").update(unsigned).sign(key, "base64url");
+  } catch (error) {
+    error.publicMessage = "PIN backend private key is not valid. Check GOOGLE_PRIVATE_KEY or GOOGLE_SERVICE_ACCOUNT_JSON in Netlify.";
+    throw error;
+  }
   const assertion = `${unsigned}.${signature}`;
 
   const response = await fetch("https://oauth2.googleapis.com/token", {
@@ -168,6 +175,55 @@ async function getAccessToken() {
   if (!response.ok) throw new Error(`Google token request failed: ${response.status}`);
   const data = await response.json();
   return data.access_token;
+}
+
+function getServiceAccountCredentials() {
+  const rawJson = clean(process.env.GOOGLE_SERVICE_ACCOUNT_JSON);
+  if (rawJson) {
+    const parsed = parseServiceAccountJson(rawJson);
+    return {
+      email: parsed.client_email,
+      privateKey: parsed.private_key
+    };
+  }
+
+  const rawBase64 = clean(process.env.GOOGLE_SERVICE_ACCOUNT_JSON_BASE64);
+  if (rawBase64) {
+    const parsed = parseServiceAccountJson(Buffer.from(rawBase64, "base64").toString("utf8"));
+    return {
+      email: parsed.client_email,
+      privateKey: parsed.private_key
+    };
+  }
+
+  return {
+    email: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL,
+    privateKey: process.env.GOOGLE_PRIVATE_KEY
+  };
+}
+
+function parseServiceAccountJson(value) {
+  try {
+    return JSON.parse(value);
+  } catch (error) {
+    error.publicMessage = "GOOGLE_SERVICE_ACCOUNT_JSON is not valid JSON.";
+    throw error;
+  }
+}
+
+function normalizePrivateKey(value) {
+  let key = clean(value);
+  if ((key.startsWith('"') && key.endsWith('"')) || (key.startsWith("'") && key.endsWith("'"))) {
+    key = key.slice(1, -1);
+  }
+  key = key.replace(/\\n/g, "\n");
+  key = key.replace(/\r\n/g, "\n");
+  if (!key.includes("BEGIN PRIVATE KEY")) {
+    const error = new Error("Service account private key is missing PEM header.");
+    error.publicMessage = "GOOGLE_PRIVATE_KEY must include BEGIN PRIVATE KEY and END PRIVATE KEY.";
+    throw error;
+  }
+  return key;
 }
 
 function json(statusCode, body) {
