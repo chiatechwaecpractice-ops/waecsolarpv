@@ -1,0 +1,26 @@
+{
+  "name": "CHIATECH ELECTRICAL WIRING TUTORIAL FOR WAEC 2026-2027",
+  "short_name": "CHIATECH WAEC",
+  "description": "CHIATECH Electrical Wiring Tutorial for WAEC 2026-2027 with practical diagrams, syllabus notes, objective drills and offline access after first login.",
+  "start_url": "waec2026solarpv.html",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#071126",
+  "theme_color": "#0c4fb3",
+  "orientation": "portrait-primary",
+  "categories": ["education", "productivity"],
+  "icons": [
+    {
+      "src": "assets/icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "assets/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

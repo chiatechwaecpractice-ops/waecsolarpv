@@ -1,0 +1,9 @@
+*.log
+.env
+.env.*
+.netlify/
+node_modules/
+dist/
+build/
+Thumbs.db
+.DS_Store
