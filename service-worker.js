@@ -1,4 +1,4 @@
-const CACHE_NAME = "chiatech-electrical-wiring-waec-v9";
+const CACHE_NAME = "chiatech-electrical-wiring-waec-v10";
 const CORE_ASSETS = [
   "./",
   "waec2026solarpv.html",
@@ -14,7 +14,7 @@ const CORE_ASSETS = [
   "assets/CEOsQuote.PNG",
   "assets/nicetime.PNG",
   "assets/icons/icon-192.png",
-  "assets/solarpv/app-auth.js?v=20260505-appsscript",
+  "assets/solarpv/app-auth.js?v=20260505-appsscript2",
   "assets/solarpv/extra-tests.js",
   "assets/solarpv/class-interaction.js",
   "ElectricalSymbolsGuide/Electrical Symbols Guide.pdf",

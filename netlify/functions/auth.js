@@ -3,12 +3,31 @@ const crypto = require("node:crypto");
 const SHEET_ID = process.env.GOOGLE_SHEET_ID || "1vf1SZmDp4QZe7tndKkfuMQYtA38Fwj0htIFu6wmOLgE";
 const RANGE = process.env.GOOGLE_SHEET_RANGE || "A:K";
 const SCOPES = "https://www.googleapis.com/auth/spreadsheets";
-const APPS_SCRIPT_AUTH_URL = process.env.GOOGLE_APPS_SCRIPT_AUTH_URL || process.env.APPS_SCRIPT_AUTH_URL || "";
-const APPS_SCRIPT_AUTH_TOKEN = process.env.GOOGLE_APPS_SCRIPT_AUTH_TOKEN || process.env.APPS_SCRIPT_AUTH_TOKEN || "";
+const APPS_SCRIPT_AUTH_URL = process.env.GOOGLE_APPS_SCRIPT_AUTH_URL ||
+  process.env.APPS_SCRIPT_AUTH_URL ||
+  process.env.GOOGLE_SCRIPT_WEB_APP_URL ||
+  process.env.APPS_SCRIPT_WEB_APP_URL ||
+  process.env.PIN_AUTH_WEB_APP_URL ||
+  "";
+const APPS_SCRIPT_AUTH_TOKEN = process.env.GOOGLE_APPS_SCRIPT_AUTH_TOKEN ||
+  process.env.APPS_SCRIPT_AUTH_TOKEN ||
+  process.env.PORTAL_AUTH_TOKEN ||
+  process.env.PIN_AUTH_TOKEN ||
+  "";
 
 exports.handler = async event => {
   if (event.httpMethod === "OPTIONS") {
     return json(204, {});
+  }
+
+  if (event.httpMethod === "GET") {
+    return json(200, {
+      ok: true,
+      service: "CHIATECH WAEC PIN access",
+      appsScriptUrlReady: Boolean(APPS_SCRIPT_AUTH_URL),
+      appsScriptTokenReady: Boolean(APPS_SCRIPT_AUTH_TOKEN),
+      mode: APPS_SCRIPT_AUTH_URL ? "sheet-proxy" : "service-account"
+    });
   }
 
   if (event.httpMethod !== "POST") {
@@ -30,7 +49,13 @@ exports.handler = async event => {
     const result = await validateStudent(payload, rows);
     return json(result.ok ? 200 : 401, result);
   } catch (error) {
-    console.error(error);
+    console.error("Student auth failed", {
+      reason: error && error.message,
+      hasAppsScriptUrl: Boolean(APPS_SCRIPT_AUTH_URL),
+      hasAppsScriptToken: Boolean(APPS_SCRIPT_AUTH_TOKEN),
+      hasServiceAccountEmail: Boolean(process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL),
+      hasPrivateKey: Boolean(process.env.GOOGLE_PRIVATE_KEY)
+    });
     return json(500, {
       ok: false,
       message: "PIN access could not be confirmed. Please contact admin on WhatsApp: 07037689917."
@@ -60,11 +85,15 @@ async function authenticateWithAppsScript(payload) {
   });
 
   const text = await response.text();
+  if (!response.ok) {
+    throw new Error(`Apps Script request failed: ${response.status}`);
+  }
+
   let result;
   try {
     result = JSON.parse(text);
   } catch {
-    throw new Error("Apps Script returned an unreadable response.");
+    throw new Error(`Apps Script returned an unreadable response: ${text.slice(0, 120)}`);
   }
 
   return sanitizeAuthResult(result);
