@@ -391,7 +391,7 @@
   function warmOfflineCache() {
     if (!("serviceWorker" in navigator)) return;
     const collect = () => {
-      const urls = new Set(["./", "waec2026solarpv.html", "style.css", "solarpv.js", "assets/solarpv/app-auth.js?v=20260502-loginfix", "assets/solarpv/extra-tests.js", "assets/solarpv/class-interaction.js", "ElectricalSymbolsGuide/Electrical Symbols Guide.pdf"]);
+      const urls = new Set(["./", "waec2026solarpv.html", "style.css", "solarpv.js", "assets/solarpv/app-auth.js?v=20260505-appsscript", "assets/solarpv/extra-tests.js", "assets/solarpv/class-interaction.js", "ElectricalSymbolsGuide/Electrical Symbols Guide.pdf"]);
       document.querySelectorAll("img[src], script[src], link[href], object[data], a[href$='.pdf']").forEach(node => {
         const value = node.getAttribute("src") || node.getAttribute("href") || node.getAttribute("data");
         if (value && !value.startsWith("http")) urls.add(value);

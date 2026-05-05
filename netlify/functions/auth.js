@@ -3,6 +3,8 @@ const crypto = require("node:crypto");
 const SHEET_ID = process.env.GOOGLE_SHEET_ID || "1vf1SZmDp4QZe7tndKkfuMQYtA38Fwj0htIFu6wmOLgE";
 const RANGE = process.env.GOOGLE_SHEET_RANGE || "A:K";
 const SCOPES = "https://www.googleapis.com/auth/spreadsheets";
+const APPS_SCRIPT_AUTH_URL = process.env.GOOGLE_APPS_SCRIPT_AUTH_URL || process.env.APPS_SCRIPT_AUTH_URL || "";
+const APPS_SCRIPT_AUTH_TOKEN = process.env.GOOGLE_APPS_SCRIPT_AUTH_TOKEN || process.env.APPS_SCRIPT_AUTH_TOKEN || "";
 
 exports.handler = async event => {
   if (event.httpMethod === "OPTIONS") {
@@ -19,6 +21,11 @@ exports.handler = async event => {
       return json(400, { ok: false, message: "Unsupported login type." });
     }
 
+    const scriptResult = await authenticateWithAppsScript(payload);
+    if (scriptResult) {
+      return json(scriptResult.ok ? 200 : 401, scriptResult);
+    }
+
     const rows = await readSheetRows();
     const result = await validateStudent(payload, rows);
     return json(result.ok ? 200 : 401, result);
@@ -30,6 +37,57 @@ exports.handler = async event => {
     });
   }
 };
+
+async function authenticateWithAppsScript(payload) {
+  if (!APPS_SCRIPT_AUTH_URL) return null;
+  if (!APPS_SCRIPT_AUTH_TOKEN) {
+    throw new Error("Apps Script token is not configured.");
+  }
+
+  const response = await fetch(APPS_SCRIPT_AUTH_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      type: "student",
+      pin: clean(payload.pin),
+      name: clean(payload.name),
+      email: clean(payload.email).toLowerCase(),
+      phone: normalizePhone(payload.phone),
+      deviceId: clean(payload.deviceId),
+      deviceName: clean(payload.deviceName),
+      token: APPS_SCRIPT_AUTH_TOKEN
+    })
+  });
+
+  const text = await response.text();
+  let result;
+  try {
+    result = JSON.parse(text);
+  } catch {
+    throw new Error("Apps Script returned an unreadable response.");
+  }
+
+  return sanitizeAuthResult(result);
+}
+
+function sanitizeAuthResult(result) {
+  if (!result || typeof result !== "object") {
+    return { ok: false, message: "PIN access could not be confirmed. Please contact admin on WhatsApp: 07037689917." };
+  }
+
+  const ok = result.ok === true;
+  return {
+    ok,
+    message: ok ? undefined : clean(result.message) || "PIN details were not accepted. Check your access details or contact admin.",
+    offlineAllowed: result.offlineAllowed !== false,
+    user: ok ? {
+      pin: clean(result.user && result.user.pin),
+      name: clean(result.user && result.user.name),
+      email: clean(result.user && result.user.email).toLowerCase(),
+      phone: normalizePhone(result.user && result.user.phone)
+    } : undefined
+  };
+}
 
 async function validateStudent(payload, rows) {
   if (!rows || rows.length < 2) {
