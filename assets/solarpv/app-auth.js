@@ -66,8 +66,8 @@
             <button type="submit">Unlock Tutorial</button>
           </form>
 
-          <form class="auth-form hidden" id="adminLoginForm" data-auth-panel="admin">
-            <label>Username <input name="username" autocomplete="username" required value="chiatech"></label>
+          <form class="auth-form hidden" id="adminLoginForm" data-auth-panel="admin" autocomplete="off">
+            <label>Username <input name="adminUsername" autocomplete="off" autocapitalize="none" spellcheck="false" required></label>
             <label>Password <input name="password" type="password" autocomplete="current-password" required></label>
             <button type="submit">Login as Admin</button>
           </form>
@@ -148,14 +148,14 @@
           unlockApp(offline);
           return;
         }
-        setStatus(error.message || "Unable to login. Check the PIN details and internet connection.", true);
+        setStatus(friendlyLoginMessage(error), true);
       }
     });
 
     document.querySelector("#adminLoginForm").addEventListener("submit", async event => {
       event.preventDefault();
       const form = new FormData(event.currentTarget);
-      const username = clean(form.get("username"));
+      const username = clean(form.get("adminUsername"));
       const password = String(form.get("password") || "");
       if (!(await verifyAdmin(username, password))) {
         setStatus("Admin login failed. Check username and password.", true);
@@ -200,7 +200,7 @@
     if (shouldUseBackendAuth()) {
       const backendResult = await authenticateFromBackend(payload, backendMessage);
       if (backendResult) return backendResult;
-      throw new Error(backendMessage[0] || "PIN backend is unavailable. Contact admin.");
+      throw new Error(backendMessage[0] || candidatePinSupportMessage());
     }
 
     const publicSheetResult = await authenticateFromPublicSheetSafely(payload, backendMessage);
@@ -210,7 +210,7 @@
       return authenticateLocalPreview(payload);
     }
 
-    throw new Error(backendMessage[0] || "PIN backend is unavailable. Contact admin.");
+    throw new Error(backendMessage[0] || candidatePinSupportMessage());
   }
 
   async function authenticateFromBackend(payload, messages) {
@@ -225,9 +225,13 @@
       if (response.status === 400 || response.status === 401) {
         return result || { ok: false, message: "PIN details were not accepted." };
       }
-      if (result && result.message) messages.push(result.message);
+      if (response.status >= 500) {
+        messages.push(candidatePinSupportMessage());
+      } else if (result && result.message) {
+        messages.push(result.message);
+      }
     } catch {
-      messages.push("PIN backend could not be reached.");
+      messages.push(candidatePinSupportMessage());
     }
     return null;
   }
@@ -244,7 +248,7 @@
   async function authenticateFromPublicSheet(payload) {
     const url = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:csv&gid=0&cacheBust=${Date.now()}`;
     const response = await fetch(url);
-    if (!response.ok) throw new Error("PIN backend is unavailable.");
+    if (!response.ok) throw new Error(candidatePinSupportMessage());
     const text = await response.text();
     const rows = parseCsv(text);
     if (rows.length < 2) throw new Error("PIN sheet has no user records yet.");
@@ -460,6 +464,19 @@
     if (!status) return;
     status.textContent = message;
     status.classList.toggle("error", Boolean(isError));
+  }
+
+  function candidatePinSupportMessage() {
+    return "PIN access could not be confirmed. Please contact admin on WhatsApp: 07037689917.";
+  }
+
+  function friendlyLoginMessage(error) {
+    const message = clean(error && error.message);
+    if (!message) return candidatePinSupportMessage();
+    if (/GOOGLE_|Netlify|backend|private key|service account|environment/i.test(message)) {
+      return candidatePinSupportMessage();
+    }
+    return message;
   }
 
   function readJson(key) {

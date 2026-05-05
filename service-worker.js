@@ -1,4 +1,4 @@
-const CACHE_NAME = "chiatech-electrical-wiring-waec-v7";
+const CACHE_NAME = "chiatech-electrical-wiring-waec-v8";
 const CORE_ASSETS = [
   "./",
   "waec2026solarpv.html",
@@ -14,7 +14,7 @@ const CORE_ASSETS = [
   "assets/CEOsQuote.PNG",
   "assets/nicetime.PNG",
   "assets/icons/icon-192.png",
-  "assets/solarpv/app-auth.js?v=20260504-productionfix",
+  "assets/solarpv/app-auth.js?v=20260505-loginfix",
   "assets/solarpv/extra-tests.js",
   "assets/solarpv/class-interaction.js",
   "ElectricalSymbolsGuide/Electrical Symbols Guide.pdf",
@@ -31,7 +31,7 @@ const CORE_ASSETS = [
 self.addEventListener("install", event => {
   event.waitUntil(
     caches.open(CACHE_NAME)
-      .then(cache => cache.addAll(CORE_ASSETS))
+      .then(cache => Promise.allSettled(CORE_ASSETS.map(asset => cache.add(encodeURI(asset)))))
       .then(() => self.skipWaiting())
   );
 });
@@ -79,7 +79,7 @@ self.addEventListener("fetch", event => {
           }
           return response;
         })
-        .catch(() => cached || caches.match("waec2026solarpv.html"));
+        .catch(() => cached || Response.error());
       return cached || network;
     })
   );

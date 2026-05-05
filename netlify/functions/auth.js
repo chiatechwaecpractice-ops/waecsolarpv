@@ -26,7 +26,7 @@ exports.handler = async event => {
     console.error(error);
     return json(500, {
       ok: false,
-      message: error.publicMessage || "PIN backend is not ready. Check Netlify environment variables or sheet access."
+      message: "PIN access could not be confirmed. Please contact admin on WhatsApp: 07037689917."
     });
   }
 };
@@ -101,7 +101,6 @@ async function readSheetRows() {
 
   if (process.env.ALLOW_PUBLIC_SHEET_AUTH !== "true") {
     const error = new Error("Missing Google service account credentials for private Sheet access.");
-    error.publicMessage = "PIN backend is not ready. Set the Google service account variables in Netlify.";
     throw error;
   }
 
@@ -158,7 +157,6 @@ async function getAccessToken() {
   try {
     signature = crypto.createSign("RSA-SHA256").update(unsigned).sign(key, "base64url");
   } catch (error) {
-    error.publicMessage = "PIN backend private key is not valid. Check GOOGLE_PRIVATE_KEY or GOOGLE_SERVICE_ACCOUNT_JSON in Netlify.";
     throw error;
   }
   const assertion = `${unsigned}.${signature}`;
@@ -213,17 +211,39 @@ function parseServiceAccountJson(value) {
 
 function normalizePrivateKey(value) {
   let key = clean(value);
+  if (key.startsWith("{")) {
+    key = clean(parseServiceAccountJson(key).private_key);
+  } else {
+    const embedded = key.match(/"private_key"\s*:\s*"([^"]+)"/);
+    if (embedded) key = embedded[1];
+  }
   if ((key.startsWith('"') && key.endsWith('"')) || (key.startsWith("'") && key.endsWith("'"))) {
-    key = key.slice(1, -1);
+    try {
+      key = JSON.parse(key);
+    } catch {
+      key = key.slice(1, -1);
+    }
   }
   key = key.replace(/\\n/g, "\n");
   key = key.replace(/\r\n/g, "\n");
+  key = rebuildSingleLinePem(key);
   if (!key.includes("BEGIN PRIVATE KEY")) {
     const error = new Error("Service account private key is missing PEM header.");
-    error.publicMessage = "GOOGLE_PRIVATE_KEY must include BEGIN PRIVATE KEY and END PRIVATE KEY.";
     throw error;
   }
   return key;
+}
+
+function rebuildSingleLinePem(value) {
+  const begin = "-----BEGIN PRIVATE KEY-----";
+  const end = "-----END PRIVATE KEY-----";
+  if (!value.includes(begin) || !value.includes(end) || value.includes("\n")) return value;
+  const body = value
+    .replace(begin, "")
+    .replace(end, "")
+    .replace(/\s+/g, "");
+  const wrapped = body.match(/.{1,64}/g) || [];
+  return [begin, ...wrapped, end, ""].join("\n");
 }
 
 function json(statusCode, body) {
