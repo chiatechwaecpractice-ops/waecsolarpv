@@ -8,7 +8,7 @@ const APPS_SCRIPT_AUTH_URL = process.env.GOOGLE_APPS_SCRIPT_AUTH_URL ||
   process.env.GOOGLE_SCRIPT_WEB_APP_URL ||
   process.env.APPS_SCRIPT_WEB_APP_URL ||
   process.env.PIN_AUTH_WEB_APP_URL ||
-  "";
+  "https://script.google.com/macros/s/AKfycbwXrD2S5aOlcBwIp6r-d2LmXzqYNxUKPGGLZ7AQfd6r1aUdWqGOlDE6xUxvphrbQKTq/exec";
 const APPS_SCRIPT_AUTH_TOKEN = process.env.GOOGLE_APPS_SCRIPT_AUTH_TOKEN ||
   process.env.APPS_SCRIPT_AUTH_TOKEN ||
   process.env.PORTAL_AUTH_TOKEN ||
@@ -26,6 +26,8 @@ exports.handler = async event => {
       service: "CHIATECH WAEC PIN access",
       appsScriptUrlReady: Boolean(APPS_SCRIPT_AUTH_URL),
       appsScriptTokenReady: Boolean(APPS_SCRIPT_AUTH_TOKEN),
+      serviceAccountReady: hasServiceAccountCredentials(),
+      publicSheetFallbackReady: process.env.ALLOW_PUBLIC_SHEET_AUTH === "true",
       mode: APPS_SCRIPT_AUTH_URL ? "sheet-proxy" : "service-account"
     });
   }
@@ -41,8 +43,11 @@ exports.handler = async event => {
     }
 
     const scriptResult = await authenticateWithAppsScript(payload);
-    if (scriptResult) {
-      return json(scriptResult.ok ? 200 : 401, scriptResult);
+    if (scriptResult && scriptResult.ok) {
+      return json(200, scriptResult);
+    }
+    if (scriptResult && !shouldTrySheetFallback(scriptResult)) {
+      return json(401, scriptResult);
     }
 
     const rows = await readSheetRows();
@@ -110,12 +115,16 @@ function sanitizeAuthResult(result) {
     message: ok ? undefined : clean(result.message) || "PIN details were not accepted. Check your access details or contact admin.",
     offlineAllowed: result.offlineAllowed !== false,
     user: ok ? {
-      pin: clean(result.user && result.user.pin),
       name: clean(result.user && result.user.name),
       email: clean(result.user && result.user.email).toLowerCase(),
       phone: normalizePhone(result.user && result.user.phone)
     } : undefined
   };
+}
+
+function shouldTrySheetFallback(result) {
+  const message = clean(result && result.message).toLowerCase();
+  return !message || message.includes("could not be confirmed") || message.includes("contact admin on whatsapp");
 }
 
 async function validateStudent(payload, rows) {
@@ -136,21 +145,21 @@ async function validateStudent(payload, rows) {
   const deviceId = clean(payload.deviceId);
   const deviceName = clean(payload.deviceName);
 
-  const record = records.find(item => {
-    const row = item.data;
-    return clean(row.pin) === pin &&
-      clean(row.name).toLowerCase() === name &&
-      clean(row.email).toLowerCase() === email &&
-      normalizePhone(row.phone) === phone;
-  });
+  const record = records.find(item => clean(item.data.pin) === pin);
 
   if (!record) {
-    return { ok: false, message: "PIN details were not found on the access sheet." };
+    return { ok: false, message: "PIN details were not accepted. Check your access details or contact admin." };
   }
 
   const data = record.data;
   if (isBlocked(data.status)) {
     return { ok: false, message: "This PIN is not active. Contact admin." };
+  }
+
+  if (!matchesOrCanClaim(data.name, name, "text") ||
+      !matchesOrCanClaim(data.email, email, "email") ||
+      !matchesOrCanClaim(data.phone, phone, "phone")) {
+    return { ok: false, message: "PIN details were not accepted. Check your access details or contact admin." };
   }
 
   const sheetDevice = clean(data.deviceid);
@@ -159,6 +168,9 @@ async function validateStudent(payload, rows) {
   }
 
   await updateLoginColumns(record.rowNumber, {
+    name: data.name || payload.name,
+    email: data.email || payload.email,
+    phone: data.phone || payload.phone,
     deviceId: sheetDevice || deviceId,
     deviceName,
     lastLogin: new Date().toISOString()
@@ -168,7 +180,6 @@ async function validateStudent(payload, rows) {
     ok: true,
     offlineAllowed: parseAllowed(data.offlineallowed),
     user: {
-      pin,
       name: data.name || payload.name,
       email: data.email || payload.email,
       phone: data.phone || payload.phone
@@ -202,6 +213,7 @@ async function updateLoginColumns(rowNumber, values) {
   if (!token) return;
 
   const updates = [
+    { range: `B${rowNumber}:D${rowNumber}`, values: [[values.name, values.email, values.phone]] },
     { range: `F${rowNumber}:G${rowNumber}`, values: [[values.deviceId, values.deviceName]] },
     { range: `J${rowNumber}:J${rowNumber}`, values: [[values.lastLogin]] }
   ];
@@ -287,6 +299,15 @@ function getServiceAccountCredentials() {
   };
 }
 
+function hasServiceAccountCredentials() {
+  try {
+    const credentials = getServiceAccountCredentials();
+    return Boolean(credentials.email && credentials.privateKey);
+  } catch {
+    return false;
+  }
+}
+
 function parseServiceAccountJson(value) {
   try {
     return JSON.parse(value);
@@ -357,6 +378,17 @@ function clean(value) {
 
 function normalizePhone(value) {
   return clean(value).replace(/[^\d+]/g, "");
+}
+
+function matchesOrCanClaim(sheetValue, submittedValue, type) {
+  const saved = type === "phone"
+    ? normalizePhone(sheetValue)
+    : clean(sheetValue).toLowerCase();
+  const submitted = type === "phone"
+    ? normalizePhone(submittedValue)
+    : clean(submittedValue).toLowerCase();
+  if (!submitted) return false;
+  return !saved || saved === submitted;
 }
 
 function isBlocked(status) {

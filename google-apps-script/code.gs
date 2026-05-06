@@ -82,7 +82,7 @@ function validateStudent(payload) {
     const rowEmail = clean(row[index.email]).toLowerCase();
     const rowPhone = normalizePhone(row[index.phone]);
 
-    if (rowPin !== pin || rowName !== name || rowEmail !== email || rowPhone !== phone) {
+    if (rowPin !== pin) {
       continue;
     }
 
@@ -91,6 +91,15 @@ function validateStudent(payload) {
       return {
         ok: false,
         message: "This PIN is not active. Please contact admin."
+      };
+    }
+
+    if (!matchesOrCanClaim(row[index.name], name, "text") ||
+        !matchesOrCanClaim(row[index.email], email, "email") ||
+        !matchesOrCanClaim(row[index.phone], phone, "phone")) {
+      return {
+        ok: false,
+        message: "PIN details were not accepted. Check your access details or contact admin."
       };
     }
 
@@ -103,6 +112,9 @@ function validateStudent(payload) {
     }
 
     updateLoginColumns(sheet, rowIndex + 1, index, {
+      name: rowName || clean(payload.name),
+      email: rowEmail || clean(payload.email).toLowerCase(),
+      phone: rowPhone || normalizePhone(payload.phone),
       deviceId: savedDeviceId || deviceId,
       deviceName: deviceName,
       lastLogin: new Date()
@@ -112,10 +124,9 @@ function validateStudent(payload) {
       ok: true,
       offlineAllowed: index.offlineallowed === -1 ? true : parseAllowed(row[index.offlineallowed]),
       user: {
-        pin: rowPin,
-        name: clean(row[index.name]),
-        email: clean(row[index.email]).toLowerCase(),
-        phone: clean(row[index.phone])
+        name: rowName || clean(payload.name),
+        email: rowEmail || clean(payload.email).toLowerCase(),
+        phone: rowPhone || normalizePhone(payload.phone)
       }
     };
   }
@@ -127,6 +138,15 @@ function validateStudent(payload) {
 }
 
 function updateLoginColumns(sheet, rowNumber, index, data) {
+  if (index.name !== -1) {
+    sheet.getRange(rowNumber, index.name + 1).setValue(data.name);
+  }
+  if (index.email !== -1) {
+    sheet.getRange(rowNumber, index.email + 1).setValue(data.email);
+  }
+  if (index.phone !== -1) {
+    sheet.getRange(rowNumber, index.phone + 1).setValue(data.phone);
+  }
   if (index.deviceid !== -1) {
     sheet.getRange(rowNumber, index.deviceid + 1).setValue(data.deviceId);
   }
@@ -181,6 +201,17 @@ function clean(value) {
 
 function normalizePhone(value) {
   return clean(value).replace(/[^\d+]/g, "");
+}
+
+function matchesOrCanClaim(sheetValue, submittedValue, type) {
+  const saved = type === "phone"
+    ? normalizePhone(sheetValue)
+    : clean(sheetValue).toLowerCase();
+  const submitted = type === "phone"
+    ? normalizePhone(submittedValue)
+    : clean(submittedValue).toLowerCase();
+  if (!submitted) return false;
+  return !saved || saved === submitted;
 }
 
 function isBlocked(status) {

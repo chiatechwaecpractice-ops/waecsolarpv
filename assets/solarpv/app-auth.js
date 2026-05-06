@@ -1,6 +1,4 @@
 (function () {
-  const SHEET_ID = "1vf1SZmDp4QZe7tndKkfuMQYtA38Fwj0htIFu6wmOLgE";
-  const SHEET_URL = "https://docs.google.com/spreadsheets/d/1vf1SZmDp4QZe7tndKkfuMQYtA38Fwj0htIFu6wmOLgE/edit?gid=0#gid=0";
   const API_URL = "/.netlify/functions/auth";
   const SESSION_KEY = "waecSolarPv.session.v1";
   const DEVICE_KEY = "waecSolarPv.deviceId.v1";
@@ -84,8 +82,7 @@
           <strong>Admin Console</strong>
           <button type="button" data-close-admin>Close</button>
         </div>
-        <p>PIN records remain in your Google Sheet backend. This device can cache access after a successful login.</p>
-        <a class="admin-sheet-link" href="${SHEET_URL}" target="_blank" rel="noreferrer">Open PIN Sheet</a>
+        <p>PIN records remain in the secure backend. This device can cache access after a successful login.</p>
         <form id="changeAdminForm" class="auth-form compact">
           <label>New private admin password <input name="newPassword" type="password" minlength="6" autocomplete="new-password" required></label>
           <button type="submit">Change Admin Password on This Device</button>
@@ -140,10 +137,20 @@
           loginAt: new Date().toISOString()
         };
         saveJson(SESSION_KEY, session);
-        if (session.offlineAllowed) saveJson(OFFLINE_KEY, { ...payload, user: result.user, loginAt: session.loginAt });
+        if (session.offlineAllowed) {
+          saveJson(OFFLINE_KEY, {
+            pinHash: await makeOfflinePinHash(payload.pin),
+            name: payload.name,
+            email: payload.email,
+            phone: payload.phone,
+            deviceId: payload.deviceId,
+            user: result.user,
+            loginAt: session.loginAt
+          });
+        }
         unlockApp(session);
       } catch (error) {
-        const offline = tryOfflineStudent(payload);
+        const offline = await tryOfflineStudent(payload);
         if (offline) {
           unlockApp(offline);
           return;
@@ -191,25 +198,9 @@
       throw new Error("Internet is required for first login on this device.");
     }
 
-    if (isLocalStaticPreview()) {
-      return authenticateLocalPreview(payload);
-    }
-
     const backendMessage = [];
-
-    if (shouldUseBackendAuth()) {
-      const backendResult = await authenticateFromBackend(payload, backendMessage);
-      if (backendResult) return backendResult;
-      throw new Error(backendMessage[0] || candidatePinSupportMessage());
-    }
-
-    const publicSheetResult = await authenticateFromPublicSheetSafely(payload, backendMessage);
-    if (publicSheetResult) return publicSheetResult;
-
-    if (isLocalStaticPreview()) {
-      return authenticateLocalPreview(payload);
-    }
-
+    const backendResult = await authenticateFromBackend(payload, backendMessage);
+    if (backendResult) return backendResult;
     throw new Error(backendMessage[0] || candidatePinSupportMessage());
   }
 
@@ -236,67 +227,11 @@
     return null;
   }
 
-  async function authenticateFromPublicSheetSafely(payload, messages) {
-    try {
-      return await authenticateFromPublicSheet(payload);
-    } catch {
-      messages.push("PIN sheet could not be reached from this local server.");
-      return null;
-    }
-  }
-
-  async function authenticateFromPublicSheet(payload) {
-    const url = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:csv&gid=0&cacheBust=${Date.now()}`;
-    const response = await fetch(url);
-    if (!response.ok) throw new Error(candidatePinSupportMessage());
-    const text = await response.text();
-    const rows = parseCsv(text);
-    if (rows.length < 2) throw new Error("PIN sheet has no user records yet.");
-    const headers = rows[0].map(value => value.trim().toLowerCase());
-    const records = rows.slice(1).map(row => Object.fromEntries(headers.map((header, index) => [header, row[index] || ""])));
-    const record = records.find(row =>
-      clean(row.pin) === payload.pin &&
-      clean(row.name).toLowerCase() === payload.name.toLowerCase() &&
-      clean(row.email).toLowerCase() === payload.email &&
-      normalizePhone(row.phone) === payload.phone
-    );
-    if (!record) return { ok: false, message: "PIN details were not found on the access sheet." };
-    if (isBlocked(record.status)) return { ok: false, message: "This PIN is not active. Contact admin." };
-    const sheetDevice = clean(record.deviceid);
-    if (sheetDevice && sheetDevice !== payload.deviceId) {
-      return { ok: false, message: "This PIN is already tied to another device. Contact admin." };
-    }
-    return {
-      ok: true,
-      offlineAllowed: parseAllowed(record.offlineallowed),
-      user: {
-        name: record.name || payload.name,
-        email: record.email || payload.email,
-        phone: record.phone || payload.phone,
-        pin: payload.pin
-      }
-    };
-  }
-
-  function authenticateLocalPreview(payload) {
-    return {
-      ok: true,
-      offlineAllowed: true,
-      localPreview: true,
-      user: {
-        name: payload.name,
-        email: payload.email,
-        phone: payload.phone,
-        pin: payload.pin
-      }
-    };
-  }
-
-  function tryOfflineStudent(payload) {
+  async function tryOfflineStudent(payload) {
     const cached = readJson(OFFLINE_KEY);
     if (!cached || cached.deviceId !== state.deviceId) return null;
     const matches =
-      cached.pin === payload.pin &&
+      cached.pinHash === await makeOfflinePinHash(payload.pin) &&
       clean(cached.name).toLowerCase() === payload.name.toLowerCase() &&
       clean(cached.email).toLowerCase() === payload.email &&
       normalizePhone(cached.phone) === payload.phone;
@@ -391,7 +326,7 @@
   function warmOfflineCache() {
     if (!("serviceWorker" in navigator)) return;
     const collect = () => {
-      const urls = new Set(["./", "waec2026solarpv.html", "style.css", "solarpv.js", "assets/solarpv/app-auth.js?v=20260505-appsscript2", "assets/solarpv/extra-tests.js", "assets/solarpv/class-interaction.js", "ElectricalSymbolsGuide/Electrical Symbols Guide.pdf"]);
+      const urls = new Set(["./", "waec2026solarpv.html", "style.css", "solarpv.js", "assets/solarpv/app-auth.js?v=20260506-backend-pin-auth", "assets/solarpv/extra-tests.js", "assets/solarpv/class-interaction.js", "ElectricalSymbolsGuide/Electrical Symbols Guide.pdf"]);
       document.querySelectorAll("img[src], script[src], link[href], object[data], a[href$='.pdf']").forEach(node => {
         const value = node.getAttribute("src") || node.getAttribute("href") || node.getAttribute("data");
         if (value && !value.startsWith("http")) urls.add(value);
@@ -419,18 +354,8 @@
     return `${platform} ${mode}`;
   }
 
-  function shouldUseBackendAuth() {
-    return !isLocalStaticPreview();
-  }
-
   function notifyAuthChange() {
     window.dispatchEvent(new CustomEvent("waec-auth-change", { detail: { session: state.session } }));
-  }
-
-  function isLocalStaticPreview() {
-    const localHosts = ["127.0.0.1", "localhost", "::1"];
-    const staticPorts = ["3000", "5173", "5500", "5501", "8080"];
-    return localHosts.includes(location.hostname) && staticPorts.includes(location.port);
   }
 
   async function readJsonResponse(response) {
@@ -447,16 +372,6 @@
 
   function normalizePhone(value) {
     return clean(value).replace(/[^\d+]/g, "");
-  }
-
-  function isBlocked(status) {
-    return ["blocked", "disabled", "inactive", "expired", "used", "no"].includes(clean(status).toLowerCase());
-  }
-
-  function parseAllowed(value) {
-    const text = clean(value).toLowerCase();
-    if (!text) return true;
-    return ["yes", "true", "1", "allow", "allowed", "active"].includes(text);
   }
 
   function setStatus(message, isError = false) {
@@ -505,34 +420,7 @@
     return Array.from(new Uint8Array(digest)).map(byte => byte.toString(16).padStart(2, "0")).join("");
   }
 
-  function parseCsv(text) {
-    const rows = [];
-    let row = [];
-    let field = "";
-    let quoted = false;
-    for (let index = 0; index < text.length; index += 1) {
-      const char = text[index];
-      const next = text[index + 1];
-      if (char === '"' && quoted && next === '"') {
-        field += '"';
-        index += 1;
-      } else if (char === '"') {
-        quoted = !quoted;
-      } else if (char === "," && !quoted) {
-        row.push(field);
-        field = "";
-      } else if ((char === "\n" || char === "\r") && !quoted) {
-        if (char === "\r" && next === "\n") index += 1;
-        row.push(field);
-        if (row.some(cell => clean(cell))) rows.push(row);
-        row = [];
-        field = "";
-      } else {
-        field += char;
-      }
-    }
-    row.push(field);
-    if (row.some(cell => clean(cell))) rows.push(row);
-    return rows;
+  function makeOfflinePinHash(pin) {
+    return sha256(`${state.deviceId}:${clean(pin)}`);
   }
 })();
