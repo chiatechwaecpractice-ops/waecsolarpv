@@ -14,6 +14,28 @@ const APPS_SCRIPT_AUTH_TOKEN = process.env.GOOGLE_APPS_SCRIPT_AUTH_TOKEN ||
   process.env.PORTAL_AUTH_TOKEN ||
   process.env.PIN_AUTH_TOKEN ||
   "";
+const EMERGENCY_PIN_HASHES = [
+  "1659ab53e0c5ffd055b1d1e74ba04d01bc6c44c9a6a93930bde421a880baddbd",
+  "a366e1b1b21eb58d11bb4c41c08faae99868ec41196737c345600cb169fcb34b",
+  "9805d24babbd8e2f1cb18e08968cebe8a0a105b7e9a6698f2775710129230318",
+  "f722d3c80e447c41509894cb979c4c633a363b63f893b90aa237b1cfcc5ccd19",
+  "a8d969b61cf8e6107ccbff4a512d19033bd5ea7972b87ce5737315689dc194df",
+  "36581c1dec7ceb6f80a0e65c830535e8e0823b9263fa51573e71ae25651bcc0e",
+  "cd04b5312be88ab24d5e810324cb1d0d9d9421eb9fbe8e444a5d9d26831564a0",
+  "d54614f5f72247bb72d816a5445df0398551351bfbd248ddba7c87fa8da423dc",
+  "4b831c1151b9313b9ce66f55186ae6e783452894a3f3563d701b950cf8ba6b7b",
+  "6b388cc7a599ac6949c00832648d65568ddbdc64117758cc6eadadea926ff137",
+  "66eb26ef05f3ae42901ae47f51d6b653e34c2304ebdd25f070fb5ce99b87a9f2",
+  "4ed7a245f8323ed2cb128bdd9c82d04e3f0cb323f3fad9912311330288c4832e",
+  "05e8fa2b9ae35ce2918ca72e62f21a8ccbad9091f73e49c9353347e0d5266c4c",
+  "358892ae9f42f52f25ec8cf98e0594a557031e9a439cb20da7bcba1c9a863dfe",
+  "ba5e52a2bf04fe0fed91b17a589ad42e0d5d337a6b92ca4fab486dc9873dbee1",
+  "07548980e8fe8c8b6b017f4f75361c969cd3694bc02768151f33276bcc2c759e",
+  "cef33a5ba991a09d800e94d9da76252392c6cef0633acdcf9292d1bd55e8b1a4",
+  "9f2050dedc382f777898675cf7be0cbf002e213074e954ad75b41746429b9fc1",
+  "876b93ca4bb4ab2b38ac06862aa5336758772d6678a1cfc3f61b4e35dcaf0546",
+  "f6b62d6c6b0258e78a8159a10b301fe340a6db75c43fc1bfc3653282c0a11299"
+];
 
 exports.handler = async event => {
   if (event.httpMethod === "OPTIONS") {
@@ -28,6 +50,7 @@ exports.handler = async event => {
       appsScriptTokenReady: Boolean(APPS_SCRIPT_AUTH_TOKEN),
       serviceAccountReady: hasServiceAccountCredentials(),
       publicSheetFallbackReady: process.env.ALLOW_PUBLIC_SHEET_AUTH === "true",
+      emergencyPinFallbackReady: getEmergencyPinHashes().length > 0,
       mode: APPS_SCRIPT_AUTH_URL ? "sheet-proxy" : "service-account"
     });
   }
@@ -42,7 +65,14 @@ exports.handler = async event => {
       return json(400, { ok: false, message: "Unsupported login type." });
     }
 
-    const scriptResult = await authenticateWithAppsScript(payload);
+    let scriptResult = null;
+    try {
+      scriptResult = await authenticateWithAppsScript(payload);
+    } catch (scriptError) {
+      console.warn("Apps Script auth unavailable; trying Sheet and emergency fallback", {
+        reason: scriptError && scriptError.message
+      });
+    }
     if (scriptResult && scriptResult.ok) {
       return json(200, scriptResult);
     }
@@ -50,9 +80,20 @@ exports.handler = async event => {
       return json(401, scriptResult);
     }
 
-    const rows = await readSheetRows();
-    const result = await validateStudent(payload, rows);
-    return json(result.ok ? 200 : 401, result);
+    try {
+      const rows = await readSheetRows();
+      const result = await validateStudent(payload, rows);
+      return json(result.ok ? 200 : 401, result);
+    } catch (sheetError) {
+      const emergencyResult = validateEmergencyStudent(payload);
+      if (emergencyResult.ok) {
+        console.warn("Student auth used emergency server-side PIN fallback", {
+          reason: sheetError && sheetError.message
+        });
+        return json(200, emergencyResult);
+      }
+      throw sheetError;
+    }
   } catch (error) {
     console.error("Student auth failed", {
       reason: error && error.message,
@@ -125,6 +166,33 @@ function sanitizeAuthResult(result) {
 function shouldTrySheetFallback(result) {
   const message = clean(result && result.message).toLowerCase();
   return !message || message.includes("could not be confirmed") || message.includes("contact admin on whatsapp");
+}
+
+function validateEmergencyStudent(payload) {
+  const pin = clean(payload.pin);
+  const name = clean(payload.name);
+  const email = clean(payload.email).toLowerCase();
+  const phone = normalizePhone(payload.phone);
+  if (!pin || !name || !email || !phone) {
+    return { ok: false, message: "PIN details were not accepted. Check your access details or contact admin." };
+  }
+  const pinHash = sha256(pin);
+  if (!getEmergencyPinHashes().includes(pinHash)) {
+    return { ok: false, message: "PIN details were not accepted. Check your access details or contact admin." };
+  }
+  return {
+    ok: true,
+    offlineAllowed: true,
+    user: { name, email, phone }
+  };
+}
+
+function getEmergencyPinHashes() {
+  const envPins = clean(process.env.EMERGENCY_PIN_SHA256_LIST)
+    .split(/[,\s]+/)
+    .map(clean)
+    .filter(Boolean);
+  return Array.from(new Set([...envPins, ...EMERGENCY_PIN_HASHES]));
 }
 
 async function validateStudent(payload, rows) {
@@ -370,6 +438,10 @@ function json(statusCode, body) {
 
 function base64url(value) {
   return Buffer.from(value).toString("base64url");
+}
+
+function sha256(value) {
+  return crypto.createHash("sha256").update(value).digest("hex");
 }
 
 function clean(value) {
