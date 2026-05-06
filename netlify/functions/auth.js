@@ -92,6 +92,9 @@ exports.handler = async event => {
         });
         return json(200, emergencyResult);
       }
+      if (getEmergencyPinHashes().length > 0) {
+        return json(401, emergencyResult);
+      }
       throw sheetError;
     }
   } catch (error) {
