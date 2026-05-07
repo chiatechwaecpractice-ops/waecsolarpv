@@ -115,6 +115,7 @@ function validateStudent(payload) {
       name: rowName || clean(payload.name),
       email: rowEmail || clean(payload.email).toLowerCase(),
       phone: rowPhone || normalizePhone(payload.phone),
+      status: "used",
       deviceId: savedDeviceId || deviceId,
       deviceName: deviceName,
       lastLogin: new Date()
@@ -138,6 +139,9 @@ function validateStudent(payload) {
 }
 
 function updateLoginColumns(sheet, rowNumber, index, data) {
+  if (index.status !== -1) {
+    sheet.getRange(rowNumber, index.status + 1).setValue(data.status);
+  }
   if (index.name !== -1) {
     sheet.getRange(rowNumber, index.name + 1).setValue(data.name);
   }
@@ -215,7 +219,7 @@ function matchesOrCanClaim(sheetValue, submittedValue, type) {
 }
 
 function isBlocked(status) {
-  return ["blocked", "disabled", "inactive", "expired", "used", "no"].indexOf(clean(status).toLowerCase()) !== -1;
+  return ["blocked", "disabled", "inactive", "expired", "no"].indexOf(clean(status).toLowerCase()) !== -1;
 }
 
 function parseAllowed(value) {

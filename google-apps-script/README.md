@@ -3,7 +3,7 @@
 Use `code.gs` as the secure Google Sheet validator for student PIN login.
 
 The Sheet should include these headers: `pin`, `name`, `email`, `phone`, `status`, `deviceid`, `devicename`, `lastlogin`, and `offlineallowed`.
-Only `pin` must be filled before sale. On first valid login, blank `name`, `email`, `phone`, and device columns are claimed by that student. If those cells are already filled, they must match the student's login details.
+Only `pin` must be filled before sale. On first valid login, blank `name`, `email`, `phone`, and device columns are claimed by that student, `status` is set to `used`, and `lastlogin` is updated. If those cells are already filled, they must match the student's login details. A `used` PIN remains valid only on the recorded device ID; use `blocked`, `disabled`, `inactive`, or `expired` to stop access.
 
 ## Required Script Property
 

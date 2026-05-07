@@ -3,6 +3,7 @@
   const SESSION_KEY = "waecSolarPv.session.v1";
   const DEVICE_KEY = "waecSolarPv.deviceId.v1";
   const OFFLINE_KEY = "waecSolarPv.offlineUser.v1";
+  const REMEMBER_KEY = "waecSolarPv.rememberDevice.v1";
   const ADMIN_HASH_KEY = "waecSolarPv.adminHash.v1";
   const ADMIN_USER_KEY = "waecSolarPv.adminUser.v1";
 
@@ -61,6 +62,7 @@
             <label>Name <input name="name" autocomplete="name" required></label>
             <label>Email <input name="email" type="email" autocomplete="email" required></label>
             <label>Phone <input name="phone" inputmode="tel" autocomplete="tel" required></label>
+            <label class="auth-check"><input name="rememberDevice" type="checkbox" checked> Save access on this device for automatic offline login</label>
             <button type="submit">Unlock Tutorial</button>
           </form>
 
@@ -136,8 +138,15 @@
           localPreview: result.localPreview === true,
           loginAt: new Date().toISOString()
         };
-        saveJson(SESSION_KEY, session);
-        if (session.offlineAllowed) {
+        const rememberDevice = form.get("rememberDevice") === "on";
+        localStorage.setItem(REMEMBER_KEY, rememberDevice ? "yes" : "no");
+        if (rememberDevice) {
+          saveJson(SESSION_KEY, session);
+        } else {
+          localStorage.removeItem(SESSION_KEY);
+          localStorage.removeItem(OFFLINE_KEY);
+        }
+        if (rememberDevice && session.offlineAllowed) {
           saveJson(OFFLINE_KEY, {
             pinHash: await makeOfflinePinHash(payload.pin),
             name: payload.name,
@@ -280,7 +289,7 @@
     if (session.role === "admin") document.querySelector("[data-admin-open]").hidden = false;
     warmOfflineCache();
     if (!options.silent) {
-      setStatus(session.localPreview ? "Local preview access granted. Deployed access will validate through the PIN sheet." : session.offlineLogin ? "Offline access restored on this device." : "Login successful. Content is being prepared for offline use.");
+      setStatus(session.localPreview ? "Local preview access granted. Deployed access will validate through the PIN sheet." : session.offlineLogin ? "Automatic offline login restored on this device." : "Login successful. This device is now recorded for secure access.");
     }
     notifyAuthChange();
   }
@@ -326,7 +335,7 @@
   function warmOfflineCache() {
     if (!("serviceWorker" in navigator)) return;
     const collect = () => {
-      const urls = new Set(["./", "waec2026solarpv.html", "style.css", "solarpv.js", "assets/solarpv/app-auth.js?v=20260506-backend-pin-auth", "assets/solarpv/extra-tests.js", "assets/solarpv/class-interaction.js", "ElectricalSymbolsGuide/Electrical Symbols Guide.pdf"]);
+      const urls = new Set(["./", "waec2026solarpv.html", "style.css", "solarpv.js", "assets/solarpv/app-auth.js?v=20260507-remember-device", "assets/solarpv/extra-tests.js", "assets/solarpv/class-interaction.js", "ElectricalSymbolsGuide/Electrical Symbols Guide.pdf"]);
       document.querySelectorAll("img[src], script[src], link[href], object[data], a[href$='.pdf']").forEach(node => {
         const value = node.getAttribute("src") || node.getAttribute("href") || node.getAttribute("data");
         if (value && !value.startsWith("http")) urls.add(value);

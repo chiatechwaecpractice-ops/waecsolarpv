@@ -244,6 +244,7 @@ async function validateStudent(payload, rows) {
     phone: data.phone || payload.phone,
     deviceId: sheetDevice || deviceId,
     deviceName,
+    status: "used",
     lastLogin: new Date().toISOString()
   });
 
@@ -285,7 +286,7 @@ async function updateLoginColumns(rowNumber, values) {
 
   const updates = [
     { range: `B${rowNumber}:D${rowNumber}`, values: [[values.name, values.email, values.phone]] },
-    { range: `F${rowNumber}:G${rowNumber}`, values: [[values.deviceId, values.deviceName]] },
+    { range: `E${rowNumber}:G${rowNumber}`, values: [[values.status, values.deviceId, values.deviceName]] },
     { range: `J${rowNumber}:J${rowNumber}`, values: [[values.lastLogin]] }
   ];
 
@@ -467,7 +468,7 @@ function matchesOrCanClaim(sheetValue, submittedValue, type) {
 }
 
 function isBlocked(status) {
-  return ["blocked", "disabled", "inactive", "expired", "used", "no"].includes(clean(status).toLowerCase());
+  return ["blocked", "disabled", "inactive", "expired", "no"].includes(clean(status).toLowerCase());
 }
 
 function parseAllowed(value) {

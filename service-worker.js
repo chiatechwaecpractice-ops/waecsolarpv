@@ -14,7 +14,7 @@ const CORE_ASSETS = [
   "assets/CEOsQuote.PNG",
   "assets/nicetime.PNG",
   "assets/icons/icon-192.png",
-  "assets/solarpv/app-auth.js?v=20260506-backend-pin-auth",
+  "assets/solarpv/app-auth.js?v=20260507-remember-device",
   "assets/solarpv/extra-tests.js",
   "assets/solarpv/class-interaction.js",
   "ElectricalSymbolsGuide/Electrical Symbols Guide.pdf",
