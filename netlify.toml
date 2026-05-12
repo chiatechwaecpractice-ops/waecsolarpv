@@ -16,6 +16,26 @@
   [headers.values]
     Cache-Control = "no-cache"
 
+[[headers]]
+  for = "/*.html"
+  [headers.values]
+    Cache-Control = "no-cache"
+
+[[headers]]
+  for = "/assets/solarpv/app-auth.js"
+  [headers.values]
+    Cache-Control = "no-cache"
+
+[[headers]]
+  for = "/solarpv.js"
+  [headers.values]
+    Cache-Control = "no-cache"
+
+[[headers]]
+  for = "/style.css"
+  [headers.values]
+    Cache-Control = "no-cache"
+
 [[redirects]]
   from = "/app"
   to = "/waec2026solarpv.html"

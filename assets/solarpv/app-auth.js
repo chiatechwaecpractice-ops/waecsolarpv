@@ -1,4 +1,6 @@
 (function () {
+  const APP_BUILD = "20260512-pin-device-lock";
+  const APP_AUTH_SCRIPT = `assets/solarpv/app-auth.js?v=${APP_BUILD}`;
   const API_URL = "/.netlify/functions/auth";
   const SESSION_KEY = "waecSolarPv.session.v1";
   const DEVICE_KEY = "waecSolarPv.deviceId.v1";
@@ -57,11 +59,11 @@
             <button type="button" data-auth-tab="admin">Admin Login</button>
           </div>
 
-          <form class="auth-form" id="studentLoginForm" data-auth-panel="student">
+          <form class="auth-form" id="studentLoginForm" data-auth-panel="student" novalidate>
             <label>PIN <input name="pin" autocomplete="one-time-code" required></label>
-            <label>Name <input name="name" autocomplete="name" required></label>
-            <label>Email <input name="email" type="email" autocomplete="email" required></label>
-            <label>Phone <input name="phone" inputmode="tel" autocomplete="tel" required></label>
+            <label>Name <input name="name" autocomplete="name"></label>
+            <label>Email <input name="email" type="email" autocomplete="email"></label>
+            <label>Phone <input name="phone" inputmode="tel" autocomplete="tel"></label>
             <label class="auth-check"><input name="rememberDevice" type="checkbox" checked> Save access on this device for automatic offline login</label>
             <button type="submit">Unlock Tutorial</button>
           </form>
@@ -114,7 +116,10 @@
       button.addEventListener("click", () => switchTab(button.dataset.authTab));
     });
 
-    document.querySelector("#studentLoginForm").addEventListener("submit", async event => {
+    const studentForm = document.querySelector("#studentLoginForm");
+    const studentPinInput = studentForm.querySelector("input[name='pin']");
+    studentPinInput.addEventListener("input", () => recoverSavedDetails(studentForm));
+    studentForm.addEventListener("submit", async event => {
       event.preventDefault();
       const form = new FormData(event.currentTarget);
       const payload = {
@@ -124,15 +129,25 @@
         email: clean(form.get("email")).toLowerCase(),
         phone: normalizePhone(form.get("phone")),
         deviceId: state.deviceId,
-        deviceName: getDeviceName()
+        deviceName: getDeviceName(),
+        userAgent: navigator.userAgent || ""
       };
-      setStatus("Checking your PIN...");
+      if (!payload.pin) {
+        setStatus("Enter your PIN to continue.", true);
+        return;
+      }
+      await recoverSavedDetails(event.currentTarget);
+      payload.name = clean(event.currentTarget.elements.name && event.currentTarget.elements.name.value);
+      payload.email = clean(event.currentTarget.elements.email && event.currentTarget.elements.email.value).toLowerCase();
+      payload.phone = normalizePhone(event.currentTarget.elements.phone && event.currentTarget.elements.phone.value);
+      setStatus(navigator.onLine ? "Checking your PIN..." : "Opening saved access on this device...");
       try {
         const result = await authenticateStudent(payload);
         if (!result.ok) throw new Error(result.message || "Login failed.");
+        const user = normalizeUser(result.user, payload);
         const session = {
           role: "student",
-          user: result.user,
+          user,
           deviceId: state.deviceId,
           offlineAllowed: result.offlineAllowed !== false,
           localPreview: result.localPreview === true,
@@ -149,11 +164,11 @@
         if (rememberDevice && session.offlineAllowed) {
           saveJson(OFFLINE_KEY, {
             pinHash: await makeOfflinePinHash(payload.pin),
-            name: payload.name,
-            email: payload.email,
-            phone: payload.phone,
+            name: user.name,
+            email: user.email,
+            phone: user.phone,
             deviceId: payload.deviceId,
-            user: result.user,
+            user,
             loginAt: session.loginAt
           });
         }
@@ -239,15 +254,16 @@
   async function tryOfflineStudent(payload) {
     const cached = readJson(OFFLINE_KEY);
     if (!cached || cached.deviceId !== state.deviceId) return null;
-    const matches =
-      cached.pinHash === await makeOfflinePinHash(payload.pin) &&
-      clean(cached.name).toLowerCase() === payload.name.toLowerCase() &&
-      clean(cached.email).toLowerCase() === payload.email &&
-      normalizePhone(cached.phone) === payload.phone;
+    const pinMatches = cached.pinHash === await makeOfflinePinHash(payload.pin);
+    const detailsMatch =
+      (!payload.name || clean(cached.name).toLowerCase() === payload.name.toLowerCase()) &&
+      (!payload.email || clean(cached.email).toLowerCase() === payload.email) &&
+      (!payload.phone || normalizePhone(cached.phone) === payload.phone);
+    const matches = pinMatches && detailsMatch;
     if (!matches) return null;
     const session = {
       role: "student",
-      user: cached.user,
+      user: normalizeUser(cached.user, cached),
       deviceId: state.deviceId,
       offlineAllowed: true,
       loginAt: new Date().toISOString(),
@@ -255,6 +271,26 @@
     };
     saveJson(SESSION_KEY, session);
     return session;
+  }
+
+  async function recoverSavedDetails(form) {
+    const cached = readJson(OFFLINE_KEY);
+    if (!cached || cached.deviceId !== state.deviceId) return false;
+    const pin = clean(form.elements.pin && form.elements.pin.value);
+    if (!pin || cached.pinHash !== await makeOfflinePinHash(pin)) return false;
+    const user = normalizeUser(cached.user, cached);
+    if (form.elements.name && !clean(form.elements.name.value)) form.elements.name.value = user.name;
+    if (form.elements.email && !clean(form.elements.email.value)) form.elements.email.value = user.email;
+    if (form.elements.phone && !clean(form.elements.phone.value)) form.elements.phone.value = user.phone;
+    return true;
+  }
+
+  function normalizeUser(user, fallback) {
+    return {
+      name: clean(user && user.name) || clean(fallback && fallback.name),
+      email: clean(user && user.email).toLowerCase() || clean(fallback && fallback.email).toLowerCase(),
+      phone: normalizePhone((user && user.phone) || (fallback && fallback.phone))
+    };
   }
 
   async function verifyAdmin(username, password) {
@@ -291,6 +327,7 @@
     if (!options.silent) {
       setStatus(session.localPreview ? "Local preview access granted. Deployed access will validate through the PIN sheet." : session.offlineLogin ? "Automatic offline login restored on this device." : "Login successful. This device is now recorded for secure access.");
     }
+    refreshAppUpdate();
     notifyAuthChange();
   }
 
@@ -329,13 +366,36 @@
 
   function registerServiceWorker() {
     if (!("serviceWorker" in navigator)) return;
-    navigator.serviceWorker.register("service-worker.js").catch(error => console.warn("Service worker registration failed.", error));
+    navigator.serviceWorker.register("service-worker.js", { updateViaCache: "none" })
+      .then(registration => {
+        registration.update().catch(() => {});
+        if (registration.waiting) registration.waiting.postMessage({ type: "SKIP_WAITING" });
+        registration.addEventListener("updatefound", () => {
+          const worker = registration.installing;
+          if (!worker) return;
+          worker.addEventListener("statechange", () => {
+            if (worker.state === "installed" && navigator.serviceWorker.controller) {
+              worker.postMessage({ type: "SKIP_WAITING" });
+            }
+          });
+        });
+      })
+      .catch(error => console.warn("Service worker registration failed.", error));
+  }
+
+  function refreshAppUpdate() {
+    if (!("serviceWorker" in navigator)) return;
+    navigator.serviceWorker.getRegistration().then(registration => {
+      if (!registration) return;
+      registration.update().catch(() => {});
+      if (registration.waiting) registration.waiting.postMessage({ type: "SKIP_WAITING" });
+    }).catch(() => {});
   }
 
   function warmOfflineCache() {
     if (!("serviceWorker" in navigator)) return;
     const collect = () => {
-      const urls = new Set(["./", "waec2026solarpv.html", "style.css", "solarpv.js", "assets/solarpv/app-auth.js?v=20260507-remember-device", "assets/solarpv/extra-tests.js", "assets/solarpv/class-interaction.js", "ElectricalSymbolsGuide/Electrical Symbols Guide.pdf"]);
+      const urls = new Set(["./", "waec2026solarpv.html", "style.css", "solarpv.js", APP_AUTH_SCRIPT, "assets/solarpv/extra-tests.js", "assets/solarpv/class-interaction.js", "ElectricalSymbolsGuide/Electrical Symbols Guide.pdf"]);
       document.querySelectorAll("img[src], script[src], link[href], object[data], a[href$='.pdf']").forEach(node => {
         const value = node.getAttribute("src") || node.getAttribute("href") || node.getAttribute("data");
         if (value && !value.startsWith("http")) urls.add(value);

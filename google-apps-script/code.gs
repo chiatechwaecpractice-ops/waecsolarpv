@@ -2,6 +2,36 @@ const SHEET_ID = "1vf1SZmDp4QZe7tndKkfuMQYtA38Fwj0htIFu6wmOLgE";
 const DEFAULT_SHEET_NAME = "";
 const ADMIN_WHATSAPP = "07037689917";
 
+const CANONICAL_HEADERS = [
+  "pin",
+  "name",
+  "email",
+  "phone",
+  "status",
+  "deviceid",
+  "devicename",
+  "firstlogin",
+  "lastlogin",
+  "logincount",
+  "offlineallowed",
+  "useragent"
+];
+
+const HEADER_ALIASES = {
+  pin: ["pins", "accesspin", "accesscode", "code", "pinno", "pinnumber"],
+  name: ["fullname", "student", "studentname", "candidate", "candidatename"],
+  email: ["emailaddress", "mail", "studentemail"],
+  phone: ["phonenumber", "phoneNo", "telephone", "mobile", "whatsapp", "whatsappnumber"],
+  status: ["used", "pinstatus", "usagestatus", "usedunused", "usedorunused"],
+  deviceid: ["device", "devicecode", "devicefingerprint", "devicekey", "deviceidentity"],
+  devicename: ["deviceinfo", "browser", "browserdevice", "devicebrowser"],
+  firstlogin: ["firstused", "firstloginat", "dateused", "claimedat"],
+  lastlogin: ["loginat", "lastused", "lastaccess", "lastseen"],
+  logincount: ["timesused", "login_count", "logins", "accesscount"],
+  offlineallowed: ["offline", "allowoffline", "offlineaccess", "allowofflineaccess"],
+  useragent: ["useragentstring", "agent", "browseragent"]
+};
+
 function doPost(event) {
   const lock = LockService.getScriptLock();
   try {
@@ -9,7 +39,7 @@ function doPost(event) {
     const payload = parsePayload(event);
     const token = PropertiesService.getScriptProperties().getProperty("PORTAL_AUTH_TOKEN");
 
-    if (!token || clean(payload.token) !== token) {
+    if (token && clean(payload.token) !== token) {
       return sendJson({
         ok: false,
         message: supportMessage()
@@ -49,19 +79,11 @@ function doGet() {
 
 function validateStudent(payload) {
   const sheet = getAccessSheet();
-  const values = sheet.getDataRange().getValues();
-  if (values.length < 2) {
-    return {
-      ok: false,
-      message: "PIN access is not ready. Please contact admin."
-    };
-  }
+  const prepared = prepareSheet(sheet);
+  const values = prepared.values;
+  const index = prepared.index;
 
-  const headers = values[0].map(normalizeHeader);
-  const index = getHeaderIndex(headers);
-  const required = ["pin", "name", "email", "phone"];
-  const missing = required.filter(field => index[field] === -1);
-  if (missing.length) {
+  if (values.length < 2 || index.pin === -1) {
     return {
       ok: false,
       message: "PIN access is not ready. Please contact admin."
@@ -69,24 +91,36 @@ function validateStudent(payload) {
   }
 
   const pin = clean(payload.pin);
-  const name = clean(payload.name).toLowerCase();
-  const email = clean(payload.email).toLowerCase();
-  const phone = normalizePhone(payload.phone);
+  const submittedName = clean(payload.name);
+  const submittedEmail = clean(payload.email).toLowerCase();
+  const submittedPhone = normalizePhone(payload.phone);
   const deviceId = clean(payload.deviceId);
   const deviceName = clean(payload.deviceName);
+  const userAgent = clean(payload.userAgent);
+
+  if (!pin) {
+    return {
+      ok: false,
+      message: "Enter your PIN to continue."
+    };
+  }
+
+  if (!deviceId) {
+    return {
+      ok: false,
+      message: "Refresh this page and try login again."
+    };
+  }
 
   for (let rowIndex = 1; rowIndex < values.length; rowIndex += 1) {
     const row = values[rowIndex];
-    const rowPin = clean(row[index.pin]);
-    const rowName = clean(row[index.name]).toLowerCase();
-    const rowEmail = clean(row[index.email]).toLowerCase();
-    const rowPhone = normalizePhone(row[index.phone]);
+    const rowPin = clean(cell(row, index.pin));
 
     if (rowPin !== pin) {
       continue;
     }
 
-    const status = index.status === -1 ? "" : clean(row[index.status]).toLowerCase();
+    const status = clean(cell(row, index.status)).toLowerCase();
     if (isBlocked(status)) {
       return {
         ok: false,
@@ -94,16 +128,7 @@ function validateStudent(payload) {
       };
     }
 
-    if (!matchesOrCanClaim(row[index.name], name, "text") ||
-        !matchesOrCanClaim(row[index.email], email, "email") ||
-        !matchesOrCanClaim(row[index.phone], phone, "phone")) {
-      return {
-        ok: false,
-        message: "PIN details were not accepted. Check your access details or contact admin."
-      };
-    }
-
-    const savedDeviceId = index.deviceid === -1 ? "" : clean(row[index.deviceid]);
+    const savedDeviceId = clean(cell(row, index.deviceid));
     if (savedDeviceId && savedDeviceId !== deviceId) {
       return {
         ok: false,
@@ -111,24 +136,56 @@ function validateStudent(payload) {
       };
     }
 
-    updateLoginColumns(sheet, rowIndex + 1, index, {
-      name: rowName || clean(payload.name),
-      email: rowEmail || clean(payload.email).toLowerCase(),
-      phone: rowPhone || normalizePhone(payload.phone),
+    const savedName = clean(cell(row, index.name));
+    const savedEmail = clean(cell(row, index.email)).toLowerCase();
+    const savedPhone = normalizePhone(cell(row, index.phone));
+    const hasSavedDetails = Boolean(savedName || savedEmail || savedPhone);
+    const hasSubmittedDetails = Boolean(submittedName || submittedEmail || submittedPhone);
+    const sameDeviceCanRecover = Boolean(savedDeviceId && savedDeviceId === deviceId && hasSavedDetails && !hasSubmittedDetails);
+
+    if (!sameDeviceCanRecover) {
+      if (!submittedName || !submittedEmail || !submittedPhone) {
+        return {
+          ok: false,
+          message: "Enter the name, email, and phone for this PIN. This is only needed on the first login."
+        };
+      }
+
+      if (!matchesOrCanClaim(savedName, submittedName, "text") ||
+          !matchesOrCanClaim(savedEmail, submittedEmail, "email") ||
+          !matchesOrCanClaim(savedPhone, submittedPhone, "phone")) {
+        return {
+          ok: false,
+          message: "PIN details were not accepted. Check your access details or contact admin."
+        };
+      }
+    }
+
+    const now = new Date();
+    const loginCount = toNumber(cell(row, index.logincount)) + 1;
+    const finalUser = {
+      name: savedName || submittedName,
+      email: savedEmail || submittedEmail,
+      phone: savedPhone || submittedPhone
+    };
+
+    updateLoginColumns(sheet, rowIndex + 1, index, row, {
+      name: finalUser.name,
+      email: finalUser.email,
+      phone: finalUser.phone,
       status: "used",
       deviceId: savedDeviceId || deviceId,
       deviceName: deviceName,
-      lastLogin: new Date()
+      firstLogin: clean(cell(row, index.firstlogin)) || now,
+      lastLogin: now,
+      loginCount: loginCount,
+      userAgent: userAgent
     });
 
     return {
       ok: true,
-      offlineAllowed: index.offlineallowed === -1 ? true : parseAllowed(row[index.offlineallowed]),
-      user: {
-        name: rowName || clean(payload.name),
-        email: rowEmail || clean(payload.email).toLowerCase(),
-        phone: rowPhone || normalizePhone(payload.phone)
-      }
+      offlineAllowed: index.offlineallowed === -1 ? true : parseAllowed(cell(row, index.offlineallowed)),
+      user: finalUser
     };
   }
 
@@ -138,28 +195,66 @@ function validateStudent(payload) {
   };
 }
 
-function updateLoginColumns(sheet, rowNumber, index, data) {
-  if (index.status !== -1) {
-    sheet.getRange(rowNumber, index.status + 1).setValue(data.status);
+function prepareSheet(sheet) {
+  if (sheet.getLastRow() === 0 || sheet.getLastColumn() === 0) {
+    sheet.getRange(1, 1, 1, CANONICAL_HEADERS.length).setValues([CANONICAL_HEADERS]);
   }
-  if (index.name !== -1) {
-    sheet.getRange(rowNumber, index.name + 1).setValue(data.name);
+
+  let values = sheet.getDataRange().getValues();
+  let headers = (values[0] || []).map(normalizeHeader);
+  let index = getHeaderIndex(headers);
+
+  if (index.pin === -1 && looksLikePinOnlySheet(values, headers)) {
+    sheet.insertRowBefore(1);
+    sheet.getRange(1, 1, 1, CANONICAL_HEADERS.length).setValues([CANONICAL_HEADERS]);
+    values = sheet.getDataRange().getValues();
+    headers = (values[0] || []).map(normalizeHeader);
+    index = getHeaderIndex(headers);
   }
-  if (index.email !== -1) {
-    sheet.getRange(rowNumber, index.email + 1).setValue(data.email);
+
+  const missing = CANONICAL_HEADERS.filter(header => header !== "pin" && index[header] === -1);
+  if (missing.length) {
+    const startColumn = Math.max(sheet.getLastColumn(), values[0].length, 1) + 1;
+    sheet.getRange(1, startColumn, 1, missing.length).setValues([missing]);
+    values = sheet.getDataRange().getValues();
+    headers = (values[0] || []).map(normalizeHeader);
+    index = getHeaderIndex(headers);
   }
-  if (index.phone !== -1) {
-    sheet.getRange(rowNumber, index.phone + 1).setValue(data.phone);
+
+  return {
+    values: values,
+    index: index
+  };
+}
+
+function looksLikePinOnlySheet(values, headers) {
+  const knownHeader = headers.some(header => {
+    if (!header) return false;
+    return CANONICAL_HEADERS.some(field => header === field || normalizedAliases(field).indexOf(header) !== -1);
+  });
+  if (knownHeader) return false;
+  return values.some(row => clean(row[0]));
+}
+
+function updateLoginColumns(sheet, rowNumber, index, row, data) {
+  setCell(sheet, rowNumber, index.name, data.name);
+  setCell(sheet, rowNumber, index.email, data.email);
+  setCell(sheet, rowNumber, index.phone, data.phone);
+  setCell(sheet, rowNumber, index.status, data.status);
+  setCell(sheet, rowNumber, index.deviceid, data.deviceId);
+  setCell(sheet, rowNumber, index.devicename, data.deviceName);
+  if (!clean(cell(row, index.firstlogin))) {
+    setCell(sheet, rowNumber, index.firstlogin, data.firstLogin);
   }
-  if (index.deviceid !== -1) {
-    sheet.getRange(rowNumber, index.deviceid + 1).setValue(data.deviceId);
-  }
-  if (index.devicename !== -1) {
-    sheet.getRange(rowNumber, index.devicename + 1).setValue(data.deviceName);
-  }
-  if (index.lastlogin !== -1) {
-    sheet.getRange(rowNumber, index.lastlogin + 1).setValue(data.lastLogin);
-  }
+  setCell(sheet, rowNumber, index.lastlogin, data.lastLogin);
+  setCell(sheet, rowNumber, index.logincount, data.loginCount);
+  setCell(sheet, rowNumber, index.useragent, data.userAgent);
+  SpreadsheetApp.flush();
+}
+
+function setCell(sheet, rowNumber, columnIndex, value) {
+  if (columnIndex === -1) return;
+  sheet.getRange(rowNumber, columnIndex + 1).setValue(value);
 }
 
 function getAccessSheet() {
@@ -171,17 +266,29 @@ function getAccessSheet() {
 }
 
 function getHeaderIndex(headers) {
-  return {
-    pin: headers.indexOf("pin"),
-    name: headers.indexOf("name"),
-    email: headers.indexOf("email"),
-    phone: headers.indexOf("phone"),
-    status: headers.indexOf("status"),
-    deviceid: headers.indexOf("deviceid"),
-    devicename: headers.indexOf("devicename"),
-    lastlogin: headers.indexOf("lastlogin"),
-    offlineallowed: headers.indexOf("offlineallowed")
-  };
+  const index = {};
+  CANONICAL_HEADERS.forEach(field => {
+    index[field] = findHeaderIndex(headers, field);
+  });
+  return index;
+}
+
+function findHeaderIndex(headers, field) {
+  const candidates = [field].concat(normalizedAliases(field));
+  for (let index = 0; index < candidates.length; index += 1) {
+    const found = headers.indexOf(candidates[index]);
+    if (found !== -1) return found;
+  }
+  return -1;
+}
+
+function normalizedAliases(field) {
+  return (HEADER_ALIASES[field] || []).map(normalizeHeader);
+}
+
+function cell(row, columnIndex) {
+  if (columnIndex === -1) return "";
+  return row[columnIndex] || "";
 }
 
 function parsePayload(event) {
@@ -225,7 +332,12 @@ function isBlocked(status) {
 function parseAllowed(value) {
   const text = clean(value).toLowerCase();
   if (!text) return true;
-  return ["yes", "true", "1", "allow", "allowed", "active"].indexOf(text) !== -1;
+  return ["yes", "true", "1", "allow", "allowed", "active", "used"].indexOf(text) !== -1;
+}
+
+function toNumber(value) {
+  const number = Number(clean(value));
+  return Number.isFinite(number) ? number : 0;
 }
 
 function supportMessage() {

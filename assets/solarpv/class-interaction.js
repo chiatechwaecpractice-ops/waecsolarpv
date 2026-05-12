@@ -10,6 +10,8 @@
 
   document.addEventListener("DOMContentLoaded", initInteraction);
   window.addEventListener("waec-auth-change", renderInteraction);
+  window.addEventListener("online", renderInteraction);
+  window.addEventListener("offline", renderInteraction);
 
   function initInteraction() {
     const form = document.querySelector("#commentForm");
@@ -48,6 +50,10 @@
   function submitComment(event) {
     event.preventDefault();
     const session = getSession();
+    if (!navigator.onLine) {
+      setCommentStatus("Internet needed for class comments.", true);
+      return;
+    }
     if (!session) {
       setCommentStatus("Login is required before commenting.", true);
       return;
@@ -83,6 +89,10 @@
 
   function submitReply(parentId) {
     const session = getSession();
+    if (!navigator.onLine) {
+      setCommentStatus("Internet needed for class comments.", true);
+      return;
+    }
     if (!session || isBanned(session)) {
       setCommentStatus("Reply not allowed for this account.", true);
       return;
@@ -101,6 +111,10 @@
 
   function reactToComment(id, reaction) {
     const session = getSession();
+    if (!navigator.onLine) {
+      setCommentStatus("Internet needed for class comments.", true);
+      return;
+    }
     if (!session || isBanned(session)) {
       setCommentStatus("Reaction not allowed for this account.", true);
       return;
@@ -162,10 +176,12 @@
     if (!form || !list) return;
     const session = getSession();
     const banned = session && isBanned(session);
+    const offline = !navigator.onLine;
     form.querySelectorAll("textarea, input, button").forEach(node => {
-      node.disabled = !session || banned;
+      node.disabled = !session || banned || offline;
     });
-    if (!session) setCommentStatus("Login first to join the class discussion.");
+    if (offline) setCommentStatus("Internet needed for class comments.", true);
+    else if (!session) setCommentStatus("Login first to join the class discussion.");
     else if (banned) setCommentStatus("You can read the class discussion, but admin has restricted this account from commenting.", true);
     else setCommentStatus("");
 

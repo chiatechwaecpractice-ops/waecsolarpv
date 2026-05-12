@@ -1,7 +1,7 @@
 const crypto = require("node:crypto");
 
 const SHEET_ID = process.env.GOOGLE_SHEET_ID || "1vf1SZmDp4QZe7tndKkfuMQYtA38Fwj0htIFu6wmOLgE";
-const RANGE = process.env.GOOGLE_SHEET_RANGE || "A:K";
+const RANGE = process.env.GOOGLE_SHEET_RANGE || "A:Z";
 const SCOPES = "https://www.googleapis.com/auth/spreadsheets";
 const APPS_SCRIPT_AUTH_URL = process.env.GOOGLE_APPS_SCRIPT_AUTH_URL ||
   process.env.APPS_SCRIPT_AUTH_URL ||
@@ -36,6 +36,36 @@ const EMERGENCY_PIN_HASHES = [
   "876b93ca4bb4ab2b38ac06862aa5336758772d6678a1cfc3f61b4e35dcaf0546",
   "f6b62d6c6b0258e78a8159a10b301fe340a6db75c43fc1bfc3653282c0a11299"
 ];
+
+const CANONICAL_HEADERS = [
+  "pin",
+  "name",
+  "email",
+  "phone",
+  "status",
+  "deviceid",
+  "devicename",
+  "firstlogin",
+  "lastlogin",
+  "logincount",
+  "offlineallowed",
+  "useragent"
+];
+
+const HEADER_ALIASES = {
+  pin: ["pins", "accesspin", "accesscode", "code", "pinno", "pinnumber"],
+  name: ["fullname", "student", "studentname", "candidate", "candidatename"],
+  email: ["emailaddress", "mail", "studentemail"],
+  phone: ["phonenumber", "phoneNo", "telephone", "mobile", "whatsapp", "whatsappnumber"],
+  status: ["used", "pinstatus", "usagestatus", "usedunused", "usedorunused"],
+  deviceid: ["device", "devicecode", "devicefingerprint", "devicekey", "deviceidentity"],
+  devicename: ["deviceinfo", "browser", "browserdevice", "devicebrowser"],
+  firstlogin: ["firstused", "firstloginat", "dateused", "claimedat"],
+  lastlogin: ["loginat", "lastused", "lastaccess", "lastseen"],
+  logincount: ["timesused", "login_count", "logins", "accesscount"],
+  offlineallowed: ["offline", "allowoffline", "offlineaccess", "allowofflineaccess"],
+  useragent: ["useragentstring", "agent", "browseragent"]
+};
 
 exports.handler = async event => {
   if (event.httpMethod === "OPTIONS") {
@@ -114,9 +144,6 @@ exports.handler = async event => {
 
 async function authenticateWithAppsScript(payload) {
   if (!APPS_SCRIPT_AUTH_URL) return null;
-  if (!APPS_SCRIPT_AUTH_TOKEN) {
-    throw new Error("Apps Script token is not configured.");
-  }
 
   const response = await fetch(APPS_SCRIPT_AUTH_URL, {
     method: "POST",
@@ -129,6 +156,7 @@ async function authenticateWithAppsScript(payload) {
       phone: normalizePhone(payload.phone),
       deviceId: clean(payload.deviceId),
       deviceName: clean(payload.deviceName),
+      userAgent: clean(payload.userAgent),
       token: APPS_SCRIPT_AUTH_TOKEN
     })
   });
@@ -203,59 +231,92 @@ async function validateStudent(payload, rows) {
     return { ok: false, message: "PIN sheet has no user records." };
   }
 
-  const headers = rows[0].map(value => clean(value).toLowerCase());
-  const records = rows.slice(1).map((row, index) => ({
-    rowNumber: index + 2,
-    data: Object.fromEntries(headers.map((header, columnIndex) => [header, row[columnIndex] || ""]))
-  }));
+  const headers = rows[0].map(normalizeHeader);
+  const index = getHeaderIndex(headers);
+  if (index.pin === -1) {
+    return { ok: false, message: "PIN access is not ready. Please contact admin." };
+  }
 
   const pin = clean(payload.pin);
-  const name = clean(payload.name).toLowerCase();
+  const name = clean(payload.name);
   const email = clean(payload.email).toLowerCase();
   const phone = normalizePhone(payload.phone);
   const deviceId = clean(payload.deviceId);
   const deviceName = clean(payload.deviceName);
+  const userAgent = clean(payload.userAgent);
 
-  const record = records.find(item => clean(item.data.pin) === pin);
+  if (!pin) {
+    return { ok: false, message: "Enter your PIN to continue." };
+  }
+
+  if (!deviceId) {
+    return { ok: false, message: "Refresh this page and try login again." };
+  }
+
+  const record = rows.slice(1).map((row, rowIndex) => ({
+    rowNumber: rowIndex + 2,
+    row
+  })).find(item => clean(cell(item.row, index.pin)) === pin);
 
   if (!record) {
     return { ok: false, message: "PIN details were not accepted. Check your access details or contact admin." };
   }
 
-  const data = record.data;
-  if (isBlocked(data.status)) {
+  const row = record.row;
+  if (isBlocked(cell(row, index.status))) {
     return { ok: false, message: "This PIN is not active. Contact admin." };
   }
 
-  if (!matchesOrCanClaim(data.name, name, "text") ||
-      !matchesOrCanClaim(data.email, email, "email") ||
-      !matchesOrCanClaim(data.phone, phone, "phone")) {
-    return { ok: false, message: "PIN details were not accepted. Check your access details or contact admin." };
-  }
-
-  const sheetDevice = clean(data.deviceid);
+  const sheetDevice = clean(cell(row, index.deviceid));
   if (sheetDevice && sheetDevice !== deviceId) {
     return { ok: false, message: "This PIN is already tied to another device. Contact admin." };
   }
 
-  await updateLoginColumns(record.rowNumber, {
-    name: data.name || payload.name,
-    email: data.email || payload.email,
-    phone: data.phone || payload.phone,
+  const savedName = clean(cell(row, index.name));
+  const savedEmail = clean(cell(row, index.email)).toLowerCase();
+  const savedPhone = normalizePhone(cell(row, index.phone));
+  const hasSavedDetails = Boolean(savedName || savedEmail || savedPhone);
+  const hasSubmittedDetails = Boolean(name || email || phone);
+  const sameDeviceCanRecover = Boolean(sheetDevice && sheetDevice === deviceId && hasSavedDetails && !hasSubmittedDetails);
+
+  if (!sameDeviceCanRecover) {
+    if (!name || !email || !phone) {
+      return {
+        ok: false,
+        message: "Enter the name, email, and phone for this PIN. This is only needed on the first login."
+      };
+    }
+    if (!matchesOrCanClaim(savedName, name, "text") ||
+        !matchesOrCanClaim(savedEmail, email, "email") ||
+        !matchesOrCanClaim(savedPhone, phone, "phone")) {
+      return { ok: false, message: "PIN details were not accepted. Check your access details or contact admin." };
+    }
+  }
+
+  const now = new Date().toISOString();
+  const user = {
+    name: savedName || name,
+    email: savedEmail || email,
+    phone: savedPhone || phone
+  };
+
+  await updateLoginColumns(record.rowNumber, index, row, {
+    name: user.name,
+    email: user.email,
+    phone: user.phone,
     deviceId: sheetDevice || deviceId,
     deviceName,
     status: "used",
-    lastLogin: new Date().toISOString()
+    firstLogin: clean(cell(row, index.firstlogin)) || now,
+    lastLogin: now,
+    loginCount: toNumber(cell(row, index.logincount)) + 1,
+    userAgent
   });
 
   return {
     ok: true,
-    offlineAllowed: parseAllowed(data.offlineallowed),
-    user: {
-      name: data.name || payload.name,
-      email: data.email || payload.email,
-      phone: data.phone || payload.phone
-    }
+    offlineAllowed: index.offlineallowed === -1 ? true : parseAllowed(cell(row, index.offlineallowed)),
+    user
   };
 }
 
@@ -280,15 +341,24 @@ async function readSheetRows() {
   return parseCsv(await response.text());
 }
 
-async function updateLoginColumns(rowNumber, values) {
+async function updateLoginColumns(rowNumber, index, row, values) {
   const token = await getAccessToken();
   if (!token) return;
 
   const updates = [
-    { range: `B${rowNumber}:D${rowNumber}`, values: [[values.name, values.email, values.phone]] },
-    { range: `E${rowNumber}:G${rowNumber}`, values: [[values.status, values.deviceId, values.deviceName]] },
-    { range: `J${rowNumber}:J${rowNumber}`, values: [[values.lastLogin]] }
-  ];
+    updateForCell(rowNumber, index.name, values.name),
+    updateForCell(rowNumber, index.email, values.email),
+    updateForCell(rowNumber, index.phone, values.phone),
+    updateForCell(rowNumber, index.status, values.status),
+    updateForCell(rowNumber, index.deviceid, values.deviceId),
+    updateForCell(rowNumber, index.devicename, values.deviceName),
+    clean(cell(row, index.firstlogin)) ? null : updateForCell(rowNumber, index.firstlogin, values.firstLogin),
+    updateForCell(rowNumber, index.lastlogin, values.lastLogin),
+    updateForCell(rowNumber, index.logincount, values.loginCount),
+    updateForCell(rowNumber, index.useragent, values.userAgent)
+  ].filter(Boolean);
+
+  if (!updates.length) return;
 
   const response = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values:batchUpdate`, {
     method: "POST",
@@ -456,6 +526,50 @@ function normalizePhone(value) {
   return clean(value).replace(/[^\d+]/g, "");
 }
 
+function normalizeHeader(value) {
+  return clean(value).toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+function getHeaderIndex(headers) {
+  return Object.fromEntries(CANONICAL_HEADERS.map(field => [field, findHeaderIndex(headers, field)]));
+}
+
+function findHeaderIndex(headers, field) {
+  const candidates = [field, ...(HEADER_ALIASES[field] || []).map(normalizeHeader)];
+  for (const candidate of candidates) {
+    const found = headers.indexOf(candidate);
+    if (found !== -1) return found;
+  }
+  return -1;
+}
+
+function cell(row, columnIndex) {
+  if (columnIndex === -1) return "";
+  return row[columnIndex] || "";
+}
+
+function updateForCell(rowNumber, columnIndex, value) {
+  if (columnIndex === -1) return null;
+  const column = columnName(columnIndex + 1);
+  return { range: `${column}${rowNumber}:${column}${rowNumber}`, values: [[value]] };
+}
+
+function columnName(number) {
+  let name = "";
+  let remaining = number;
+  while (remaining > 0) {
+    const modulo = (remaining - 1) % 26;
+    name = String.fromCharCode(65 + modulo) + name;
+    remaining = Math.floor((remaining - modulo) / 26);
+  }
+  return name;
+}
+
+function toNumber(value) {
+  const number = Number(clean(value));
+  return Number.isFinite(number) ? number : 0;
+}
+
 function matchesOrCanClaim(sheetValue, submittedValue, type) {
   const saved = type === "phone"
     ? normalizePhone(sheetValue)
@@ -474,7 +588,7 @@ function isBlocked(status) {
 function parseAllowed(value) {
   const text = clean(value).toLowerCase();
   if (!text) return true;
-  return ["yes", "true", "1", "allow", "allowed", "active"].includes(text);
+  return ["yes", "true", "1", "allow", "allowed", "active", "used"].includes(text);
 }
 
 function parseCsv(text) {
